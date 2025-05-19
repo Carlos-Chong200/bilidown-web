@@ -24,7 +24,7 @@ function App() {
   const [transpferState, setTransferState] = useState(false);
   const [transpferProgress, setTransferProgress] = useState(0);
 
-
+const [currentDownloadIndex, setCurrentDownloadIndex] = useState(0);
 
 
   useEffect(() => {
@@ -82,11 +82,17 @@ function App() {
       const res = await instance.post("/av", { "bv": bv, "SESSDATA": LocalStorageUtil.getItem('SESSDATA') });
       setVideoInfo(res.data.data);
       const urls = []; // 存储获取的资源链接
-      for (let i = 0; i < res.data.data.pages.length; i++) {
-        const cid = res.data.data.pages[i].cid;
-        const url = await handleCidAid(res.data.data.aid, cid);
+      console.log("res.data.data.ugc_season.sections",res.data.data.ugc_season.sections[0].episodes)
+      for (let i = 0; i < res.data.data.ugc_season.sections[0].episodes.length; i++) {
+        console.log("res.data.data.ugc_season.sections[0].episodes[i]",res.data.data.ugc_season.sections[0].episodes[i])
+        const cid = res.data.data.ugc_season.sections[0].episodes[i].cid;
+        const aid = res.data.data.ugc_season.sections[0].episodes[i].aid;
+        const title = res.data.data.ugc_season.sections[0].episodes[i].title;
+        console.log("aid",aid,"cid",cid)
+        const url = await handleCidAid(aid, cid);
+        let req = {url:url,title:title}
         if (url) {
-          urls.push(url);
+          urls.push(req);
         }
       }
       setResourceUrls(urls); // 设置所有资源链接
@@ -99,43 +105,53 @@ function App() {
     return match ? `BV${match[1]}` : null;
   }
 
-  const handleDownloadVideo = async () => {
-    if (resourceUrls.length === 0) {
-      messageApi.error("没有可下载的资源链接");
-      return;
-    }
+ const handleDownloadVideo = async () => {
+  if (resourceUrls.length === 0) {
+    messageApi.error("没有可下载的资源链接");
+    return;
+  }
 
-    setDownloadState(true);
-    const downloadPromises = resourceUrls.map((url) => {
-      return axios.get(url, {
+  setDownloadState(true);
+  setProgress(0);
+  setCurrentDownloadIndex(0); // 新增状态，记录当前下载的索引
+
+  try {
+    for (let i = 0; i < resourceUrls.length; i++) {
+      setCurrentDownloadIndex(i);
+      let req = resourceUrls[i];
+      let url = req.url;
+      let title = req.title;
+      const resp = await axios.get(url, {
         responseType: "blob",
         onDownloadProgress: evt => {
-          setProgress(prev => Math.max(prev, parseInt((evt.loaded / evt.total) * 100))); // 更新最大进度
+          // 计算当前文件的下载进度
+          const currentFileProgress = parseInt((evt.loaded / evt.total) * 100);
+          // 更新总进度（考虑已完成的文件）
+          const overallProgress = ((i / resourceUrls.length) * 100) + 
+                                 ((currentFileProgress / resourceUrls.length));
+          setProgress(Math.round(overallProgress));
         }
       });
-    });
 
-    try {
-      const responses = await Promise.all(downloadPromises);
-      responses.forEach((resp, index) => {
-        const blobUrl = window.URL.createObjectURL(resp.data);
-        const a = document.createElement("a");
-        a.download = `${videoInfo.title}_${index + 1}.mp4`; // 添加序号以区分文件
-        a.href = blobUrl;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(blobUrl);
-      });
-      messageApi.success("下载完成，视频已保存到本地");
-      setProgress(0);
-    } catch (error) {
-      messageApi.error("下载过程中出错，请重试");
-    } finally {
-      setProgress(0);
-      setDownloadState(false);
+      const blobUrl = window.URL.createObjectURL(resp.data);
+      const a = document.createElement("a");
+      a.download = `${title}_${i + 1}.mp4`;
+      a.href = blobUrl;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
     }
-  };
+
+    messageApi.success("下载完成，视频已保存到本地");
+  } catch (error) {
+    messageApi.error(`下载第 ${currentDownloadIndex + 1} 个视频时出错: ${error.message}`);
+  } finally {
+    setProgress(0);
+    setCurrentDownloadIndex(0);
+    setDownloadState(false);
+  }
+};    
 
   const handleCidAid = async (aid, cid) => {
     const res = await instance.post("/download", { aid, cid, "SESSDATA": LocalStorageUtil.getItem('SESSDATA'), "qn": selectOption });
